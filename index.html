@@ -19,7 +19,7 @@ body { font-family: "DIN Condensed", "DIN Condensed Bold", "Barlow Condensed", "
 
 /* HEADER */
 header { background: #0a0a0d; border-bottom: 1px solid var(--border); padding: 0 20px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
-.logo-img { height: 42px; filter: none; opacity: 1; }
+.logo-img { height: 42px; filter: invert(1); opacity: 1; }
 .header-center { display: flex; align-items: center; gap: 6px; }
 .board-switcher { display: flex; align-items: center; gap: 0; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .board-tab { padding: 6px 14px; font-size: 12px; font-weight: 700; color: var(--muted); cursor: pointer; border: none; background: transparent; font-family: "DIN Condensed", "Barlow Condensed", sans-serif; letter-spacing: 1px; transition: all 0.15s; white-space: nowrap; border-right: 1px solid var(--border); }
@@ -240,6 +240,7 @@ header { background: #0a0a0d; border-bottom: 1px solid var(--border); padding: 0
     <button class="board-tab-add" onclick="addBoard()" title="Neues Board">＋</button>
   </div>
   <div class="header-right">
+    <div id="event-countdown" style="display:none;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:5px 12px;font-size:12px;font-weight:700;letter-spacing:1px;cursor:pointer" onclick="editEventDate()" title="Eventdatum bearbeiten"></div>
     <button class="btn btn-primary" onclick="openNewCard(null)">+ Neue Aufgabe</button>
   </div>
 </header>
@@ -425,6 +426,7 @@ async function switchBoard(id) {
   renderTree();
   renderTeam();
   renderProgress();
+  loadEventDate();
   if(currentMod) selectMod(currentMod);
   else { document.getElementById("board-title").textContent = "—"; document.getElementById("kanban").querySelectorAll(".kanban-col").forEach(c=>c.remove()); }
 }
@@ -749,6 +751,7 @@ function setView(view, btn) {
 // ── DELETE CARD ───────────────────────────────────────────────
 async function delCard(e, cardId) {
   e.stopPropagation();
+  if(!confirm("Karte wirklich löschen?")) return;
   await sb.from("cards").delete().eq("id", cardId);
   for(const mid in get("colsByMod")) {
     get("colsByMod")[mid].forEach(col => {
@@ -806,6 +809,37 @@ function updateModSelect(){const sel=document.getElementById("m-module");sel.inn
 
 // ── TOAST ──────────────────────────────────────────────────────
 function showToast(msg){const t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");clearTimeout(t._to);t._to=setTimeout(()=>t.classList.remove("show"),2400);saveToStorage();}
+
+// ── EVENT COUNTDOWN ──────────────────────────────────────────
+function loadEventDate(){
+  const d = localStorage.getItem("he_event_date_"+currentBoardId);
+  renderCountdown(d);
+}
+function renderCountdown(dateStr){
+  const el = document.getElementById("event-countdown");
+  if(!el) return;
+  if(!dateStr){ el.style.display="none"; return; }
+  const diff = Math.ceil((new Date(dateStr) - new Date()) / 86400000);
+  el.style.display = "flex";
+  if(diff > 0){
+    el.innerHTML = `<span style="color:var(--accent2)">⏳</span> <span>${diff} Tage</span>`;
+    el.style.color = diff <= 14 ? "var(--danger)" : "var(--text)";
+  } else if(diff === 0){
+    el.innerHTML = `<span style="color:var(--accent3)">🎉</span> <span>Heute!</span>`;
+  } else {
+    el.innerHTML = `<span style="color:var(--muted)">✓</span> <span style="color:var(--muted)">Event vorbei</span>`;
+  }
+}
+function editEventDate(){
+  if(sessionStorage.getItem("he_role") !== "admin"){ showToast("⚠ Nur Admins können das Datum setzen"); return; }
+  const cur = localStorage.getItem("he_event_date_"+currentBoardId) || "";
+  const d = prompt("Eventdatum (YYYY-MM-DD):", cur);
+  if(d === null) return;
+  if(d.trim() === ""){ localStorage.removeItem("he_event_date_"+currentBoardId); renderCountdown(null); showToast("✓ Datum entfernt"); return; }
+  localStorage.setItem("he_event_date_"+currentBoardId, d.trim());
+  renderCountdown(d.trim());
+  showToast("✓ Eventdatum gesetzt");
+}
 
 // ── START ──────────────────────────────────────────────────────
 
