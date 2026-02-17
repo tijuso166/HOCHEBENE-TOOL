@@ -843,7 +843,7 @@ function editEventDate(){
 
 // ── START ──────────────────────────────────────────────────────
 
-const USERS={"admin":"8109c4fe83ea77e40da9f9b424995ad3183a02327552d074968b326c1d8772a6","crew":"f524cd923668787bec2f39c0944432d740c71ae31d32521a3d41eac6296b7a23"};
+const USERS={"admin":"8109c4fe83ea77e40da9f9b424995ad3183a02327552d074968b326c1d8772a6","crew":"f524cd923668787bec2f39c0944432d740c71ae31d32521a3d41eac6296b7a23","stab":"2310245324d16fc5c275230d692bb4beb1e670d1c5033f6226a22a7c94468de2"};
 async function sha256(str){const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(str));return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");}
 async function doLogin(){const u=document.getElementById("login-user").value.trim().toLowerCase();const p=document.getElementById("login-pass").value;const hash=await sha256(p);if(USERS[u]&&USERS[u]===hash){document.getElementById("login-screen").style.display="none";document.getElementById("main-app").style.display="";sessionStorage.setItem("he_auth",u);sessionStorage.setItem("he_role",u);init();}else{document.getElementById("login-err").style.display="block";document.getElementById("login-pass").value="";document.getElementById("login-pass").focus();}}
 if(sessionStorage.getItem("he_auth")){document.getElementById("login-screen").style.display="none";document.getElementById("main-app").style.display="";init();}else{document.getElementById("login-user").focus();}
