@@ -1,13 +1,20 @@
--- HOCHEBENE – Supabase Schema Setup
--- Run this in the Supabase SQL Editor:
--- https://supabase.com/dashboard/project/olbjelxyeabslimuwsxg/sql/new
+-- HOCHEBENE – Supabase Schema
+-- Run in SQL Editor: https://supabase.com/dashboard/project/olbjelxyeabslimuwsxg/sql/new
+
+-- ── RESET (run this first to start fresh) ─────────────────────
+-- delete from cards;
+-- delete from columns;
+-- delete from modules;
+-- delete from team_members;
+-- delete from boards;
 
 -- ── TABLES ────────────────────────────────────────────────────
 
 create table if not exists boards (
-  id       text primary key,
-  name     text not null,
-  position integer not null default 0
+  id         text primary key,
+  name       text not null,
+  position   integer not null default 0,
+  event_date text
 );
 
 create table if not exists team_members (
@@ -61,8 +68,6 @@ create index if not exists idx_cards_column       on cards(column_id);
 create index if not exists idx_cards_module       on cards(module_id);
 
 -- ── ROW LEVEL SECURITY ────────────────────────────────────────
--- The app uses the anon key, so we need permissive policies.
--- If you want auth-based access control, remove these and add proper policies.
 
 alter table boards       enable row level security;
 alter table team_members enable row level security;
@@ -70,7 +75,6 @@ alter table modules      enable row level security;
 alter table columns      enable row level security;
 alter table cards        enable row level security;
 
--- Allow full access for anonymous (anon) role
 create policy "anon_all_boards"       on boards       for all to anon using (true) with check (true);
 create policy "anon_all_team_members" on team_members for all to anon using (true) with check (true);
 create policy "anon_all_modules"      on modules      for all to anon using (true) with check (true);
@@ -78,11 +82,12 @@ create policy "anon_all_columns"      on columns      for all to anon using (tru
 create policy "anon_all_cards"        on cards        for all to anon using (true) with check (true);
 
 -- ── REALTIME ──────────────────────────────────────────────────
--- Enable realtime for all tables (do this in Supabase Dashboard → Database → Replication
--- OR run the statements below)
 
 alter publication supabase_realtime add table boards;
 alter publication supabase_realtime add table team_members;
 alter publication supabase_realtime add table modules;
 alter publication supabase_realtime add table columns;
 alter publication supabase_realtime add table cards;
+
+-- ── ADD event_date IF UPGRADING FROM OLD SCHEMA ───────────────
+alter table boards add column if not exists event_date text;

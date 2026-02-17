@@ -525,7 +525,7 @@ async function init() {
     showLoading("Erste Einrichtung...");
     await seedInitialData();
   } else {
-    boards = boardData.map(b => ({id:b.id, name:b.name, team:[], modules:[], colsByMod:{}, cards:{}}));
+    boards = boardData.map(b => ({id:b.id, name:b.name, team:[], modules:[], colsByMod:{}, cards:{}, event_date:b.event_date||null}));
   }
   
   hideLoading();
@@ -536,64 +536,15 @@ async function init() {
 }
 
 async function seedInitialData() {
-  // Create the 3 boards
-  const b1id = "hochebene2026";
-  const b2id = "hochebene2027";
-  const b3id = "crewtag2026";
-  
-  await sb.from("boards").insert([
-    {id:b1id, name:"Hochebene 2026", position:0},
-    {id:b2id, name:"Hochebene 2027", position:1},
-    {id:b3id, name:"Crew-Tag 2026",  position:2},
+  await sb.from("boards").upsert([
+    {id:"hochebene2026", name:"Hochebene 2026", position:0},
+    {id:"hochebene2027", name:"Hochebene 2027", position:1},
+    {id:"crewtag2026",   name:"Crew-Tag 2026",  position:2},
   ]);
-
-  // Seed team for Hochebene 2026
-  const team = [
-    {id:"tm1",board_id:b1id,name:"Max Müller",  color:"#ff6b2b"},
-    {id:"tm2",board_id:b1id,name:"Sarah Koch",  color:"#06d6a0"},
-    {id:"tm3",board_id:b1id,name:"Tim Berger",  color:"#ffd166"},
-    {id:"tm4",board_id:b1id,name:"Lisa Stein",  color:"#a78bfa"},
-    {id:"tm5",board_id:b1id,name:"Jan Wolff",   color:"#38bdf8"},
-    {id:"tm6",board_id:b1id,name:"Mia Braun",   color:"#ef476f"},
-  ];
-  await sb.from("team_members").insert(team);
-
-  // Seed modules
-  const mods = [
-    {id:"m1",  board_id:b1id, parent_id:null, name:"Technik",       color:"#ff6b2b", owner:"Max Müller", position:0},
-    {id:"m1a", board_id:b1id, parent_id:"m1", name:"Licht",         color:"#ffd166", owner:"Lisa Stein", position:0},
-    {id:"m1b", board_id:b1id, parent_id:"m1", name:"Ton",           color:"#06d6a0", owner:"Sarah Koch", position:1},
-    {id:"m2",  board_id:b1id, parent_id:null, name:"Mobile Bar",    color:"#a78bfa", owner:"Mia Braun",  position:1},
-    {id:"m3",  board_id:b1id, parent_id:null, name:"Bühnenaufbau",  color:"#38bdf8", owner:"Jan Wolff",  position:2},
-    {id:"m4",  board_id:b1id, parent_id:null, name:"Catering",      color:"#f97316", owner:"",           position:3},
-    {id:"m5",  board_id:b1id, parent_id:null, name:"Marketing",     color:"#ec4899", owner:"",           position:4},
-  ];
-  await sb.from("modules").insert(mods);
-
-  // Seed columns for Technik
-  const cols = [
-    {id:"c1", board_id:b1id, module_id:"m1", name:"To Do",          color:"#6b6b88", position:0},
-    {id:"c2", board_id:b1id, module_id:"m1", name:"In Bearbeitung", color:"#ff6b2b", position:1},
-    {id:"c3", board_id:b1id, module_id:"m1", name:"Erledigt",       color:"#06d6a0", position:2},
-  ];
-  await sb.from("columns").insert(cols);
-
-  // Seed cards
-  const cards = [
-    {id:"k1",board_id:b1id,column_id:"c1",module_id:"m1",title:"Pioneer DJ-Mixer mieten",note:"CDJ-3000 + DJM-900NXS2",owner:"Tim Berger",due_date:"2025-06-12",priority:"high",position:0,check_items:[{text:"Angebot einholen",done:true},{text:"Verfügbarkeit",done:false},{text:"Anzahlung",done:false}]},
-    {id:"k2",board_id:b1id,column_id:"c1",module_id:"m1",title:"Lichtplan finalisieren",note:"Stage + FOH Position abstimmen",owner:"Lisa Stein",due_date:"2025-06-18",priority:"mid",position:1,check_items:[]},
-    {id:"k3",board_id:b1id,column_id:"c1",module_id:"m1",title:"XLR-Kabel bestellen (×20)",note:"",owner:"Jan Wolff",due_date:"2025-06-22",priority:"low",position:2,check_items:[]},
-    {id:"k4",board_id:b1id,column_id:"c2",module_id:"m1",title:"PA System konfigurieren",note:"d&b audiotechnik, 2×Sub 4×Top",owner:"Sarah Koch",due_date:"2025-06-15",priority:"high",position:0,check_items:[{text:"Sub positionieren",done:true},{text:"Tops aufhängen",done:true},{text:"Soundcheck",done:false}]},
-    {id:"k5",board_id:b1id,column_id:"c2",module_id:"m1",title:"Moving Heads einrichten",note:"",owner:"Lisa Stein",due_date:"2025-06-20",priority:"mid",position:1,check_items:[{text:"Aufhängen",done:true},{text:"Programmieren",done:false}]},
-    {id:"k6",board_id:b1id,column_id:"c3",module_id:"m1",title:"Techniker gebucht",note:"",owner:"Max Müller",due_date:"2025-05-28",priority:"mid",position:0,check_items:[]},
-    {id:"k7",board_id:b1id,column_id:"c3",module_id:"m1",title:"Budget genehmigt",note:"",owner:"Max Müller",due_date:"2025-05-20",priority:"low",position:1,check_items:[]},
-  ];
-  await sb.from("cards").insert(cards);
-
   boards = [
-    {id:b1id, name:"Hochebene 2026", team:[], modules:[], colsByMod:{}, cards:{}},
-    {id:b2id, name:"Hochebene 2027", team:[], modules:[], colsByMod:{}, cards:{}},
-    {id:b3id, name:"Crew-Tag 2026",  team:[], modules:[], colsByMod:{}, cards:{}},
+    {id:"hochebene2026", name:"Hochebene 2026", team:[], modules:[], colsByMod:{}, cards:{}, event_date:null},
+    {id:"hochebene2027", name:"Hochebene 2027", team:[], modules:[], colsByMod:{}, cards:{}, event_date:null},
+    {id:"crewtag2026",   name:"Crew-Tag 2026",  team:[], modules:[], colsByMod:{}, cards:{}, event_date:null},
   ];
 }
 
@@ -885,7 +836,7 @@ function showToast(msg){const t=document.getElementById("toast");t.textContent=m
 
 // ── EVENT COUNTDOWN ──────────────────────────────────────────
 function loadEventDate(){
-  const d = localStorage.getItem("he_event_date_"+currentBoardId);
+  const d = getBoard()?.event_date || null;
   renderCountdown(d);
 }
 function renderCountdown(dateStr){
@@ -905,13 +856,14 @@ function renderCountdown(dateStr){
 }
 function editEventDate(){
   if(sessionStorage.getItem("he_role") !== "admin"){ showToast("⚠ Nur Admins können das Datum setzen"); return; }
-  const cur = localStorage.getItem("he_event_date_"+currentBoardId) || "";
+  const cur = getBoard()?.event_date || "";
   const d = prompt("Eventdatum (YYYY-MM-DD):", cur);
   if(d === null) return;
-  if(d.trim() === ""){ localStorage.removeItem("he_event_date_"+currentBoardId); renderCountdown(null); showToast("✓ Datum entfernt"); return; }
-  localStorage.setItem("he_event_date_"+currentBoardId, d.trim());
-  renderCountdown(d.trim());
-  showToast("✓ Eventdatum gesetzt");
+  const val = d.trim() || null;
+  sb.from("boards").update({event_date: val}).eq("id", currentBoardId);
+  getBoard().event_date = val;
+  renderCountdown(val);
+  showToast(val ? "✓ Eventdatum gesetzt" : "✓ Datum entfernt");
 }
 
 // ── START ──────────────────────────────────────────────────────
