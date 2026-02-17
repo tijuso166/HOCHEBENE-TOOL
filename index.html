@@ -379,6 +379,7 @@ let currentBoardId = null;
 let currentMod = null;
 let currentView = "kanban";
 let targetColId = null;
+let editingCardId = null;
 let dragCardEl=null, dragCardId=null, dragSrcColId=null, dropIndicator=null;
 
 // ── SUPABASE ──────────────────────────────────────────────────
@@ -420,7 +421,7 @@ async function switchBoard(id) {
   await loadBoardData(id);
   hideLoading();
   const b = getBoard();
-  currentMod = b.modules[0]?.id || null;
+  currentMod = "__overview__";
   palIdx = b.team.length;
   renderBoardTabs();
   renderTree();
@@ -623,7 +624,76 @@ function saveToStorage() {
 function renderTree() {
   const el = document.getElementById("module-tree");
   el.innerHTML = "";
+  // Board overview item
+  const board = getBoard();
+  const overviewActive = currentMod === "__overview__";
+  const ov = document.createElement("div");
+  ov.className = "tree-item" + (overviewActive ? " active" : "");
+  ov.style.cssText = "font-weight:700;margin-bottom:3px;";
+  ov.innerHTML = `<span class="tree-toggle hidden">▶</span><span class="tree-dot" style="background:var(--accent)"></span><span class="tree-name">${board.name}</span>`;
+  ov.addEventListener("click", () => selectOverview());
+  el.appendChild(ov);
   get("modules").forEach(m => el.appendChild(buildNode(m)));
+}
+function selectOverview() {
+  currentMod = "__overview__";
+  const board = getBoard();
+  document.getElementById("board-title").textContent = board.name;
+  document.getElementById("breadcrumb").innerHTML = `<span class="bc-part">${board.name}</span>`;
+  updateOwnerChip("");
+  renderTree();
+  if(currentView==="kanban") renderBoardOverview(); else renderListOverview();
+  renderProgress();
+  updateModSelect();
+}
+function renderBoardOverview() {
+  const kanban = document.getElementById("kanban");
+  kanban.querySelectorAll(".kanban-col").forEach(c=>c.remove());
+  const addBtn = kanban.querySelector(".add-col-wrapper");
+  // Group all cards by module, show each module as a section-header col
+  const allModules = [];
+  function collectMods(arr){ arr.forEach(m=>{ allModules.push(m); if(m.children) collectMods(m.children); }); }
+  collectMods(get("modules"));
+  allModules.forEach(mod => {
+    const cols = get("colsByMod")[mod.id] || [];
+    const allCardIds = cols.flatMap(c=>c.cardIds);
+    if(allCardIds.length === 0) return;
+    const colDiv = document.createElement("div");
+    colDiv.className = "kanban-col";
+    colDiv.style.minWidth = "300px";
+    colDiv.innerHTML = `<div class="kanban-col-header"><div class="col-title"><div class="col-dot" style="background:${mod.color}"></div><span class="col-title-text">${mod.name}</span></div><span class="col-count">${allCardIds.length}</span></div><div class="kanban-cards" id="ov-cc-${mod.id}"></div>`;
+    kanban.insertBefore(colDiv, addBtn);
+    const cardsEl = colDiv.querySelector(".kanban-cards");
+    allCardIds.forEach(cid=>{ const card=get("cards")[cid]; if(card){ const el=makeCardEl(card); el.draggable=false; cardsEl.appendChild(el); } });
+  });
+}
+function renderListOverview() {
+  const container = document.getElementById("list-container");
+  container.innerHTML = "";
+  const allModules = [];
+  function collectMods(arr){ arr.forEach(m=>{ allModules.push(m); if(m.children) collectMods(m.children); }); }
+  collectMods(get("modules"));
+  allModules.forEach(mod => {
+    const cols = get("colsByMod")[mod.id] || [];
+    const allCardIds = cols.flatMap(c=>c.cardIds);
+    if(allCardIds.length === 0) return;
+    const header = document.createElement("div");
+    header.style.cssText = "padding:10px 4px 4px;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:"+mod.color+";border-bottom:1px solid var(--border);margin-bottom:4px;";
+    header.textContent = mod.name;
+    container.appendChild(header);
+    allCardIds.forEach(cid => {
+      const card = get("cards")[cid];
+      if(!card) return;
+      const total=card.checkItems.length,done=card.checkItems.filter(i=>i.done).length;
+      const ov=card.date&&new Date(card.date)<new Date();
+      const dateStr=card.date?new Date(card.date).toLocaleDateString("de-DE",{day:"numeric",month:"short"}):"";
+      const color=getMemberColor(card.owner);
+      const row=document.createElement("div");row.className="list-row";
+      row.innerHTML=`<span class="list-prio-dot prio-${card.prio}"></span><span class="list-title" ondblclick="openEditCard('${card.id}')">${card.title}</span><span class="list-owner">${card.owner?`<div class="avatar" style="width:20px;height:20px;font-size:9px;background:${color}">${getInitials(card.owner)}</div>`:"—"}</span><span class="list-date${ov?" overdue":""}">${ov?"⚠ ":""}${dateStr}</span><span style="color:var(--muted);font-size:11px">${total?`${done}/${total}`:"—"}</span>`;
+      container.appendChild(row);
+    });
+  });
+  if(container.innerHTML==="") container.innerHTML=`<div style="text-align:center;padding:40px;color:var(--muted)">Keine Aufgaben vorhanden</div>`;
 }
 function buildNode(mod) {
   const wrap = document.createElement("div");
@@ -652,8 +722,10 @@ function getPath(id,arr=get("modules"),path=[]){for(const m of arr){if(m.id===id
 function findParentArr(id,arr=get("modules")){for(let i=0;i<arr.length;i++){if(arr[i].id===id)return{arr,idx:i};if(arr[i].children){const r=findParentArr(id,arr[i].children);if(r)return r;}}return null;}
 
 function selectMod(id) {
+  if(id === "__overview__"){ selectOverview(); return; }
   currentMod = id;
   const mod = findMod(id);
+  if(!mod) return;
   document.getElementById("board-title").textContent = mod.name;
   const path = getPath(id);
   document.getElementById("breadcrumb").innerHTML = path.map((m,i)=>`<span class="bc-part" onclick="selectMod('${m.id}')">${m.name}</span>${i<path.length-1?'<span class="bc-sep"> / </span>':""}`).join("");
@@ -696,7 +768,7 @@ function getCols(){
 }
 function findCol(colId){for(const mid in get("colsByMod")){const c=get("colsByMod")[mid].find(c=>c.id===colId);if(c)return c;}return null;}
 function makeColEl(col){const div=document.createElement("div");div.className="kanban-col";div.dataset.colid=col.id;div.innerHTML=`<div class="kanban-col-header"><div class="col-title"><div class="col-dot" style="background:${col.color}"></div><span class="col-title-text" ondblclick="renameCol('${col.id}')" title="Doppelklick umbenennen">${col.name}</span></div><span class="col-count" id="cnt-${col.id}">0</span><button class="col-del" onclick="delCol('${col.id}')">✕</button></div><div class="kanban-cards" id="cc-${col.id}" data-colid="${col.id}"></div><button class="add-card-btn" onclick="openNewCard('${col.id}')">＋ Aufgabe hinzufügen</button>`;const zone=div.querySelector(".kanban-cards");zone.addEventListener("dragover",onDragOver);zone.addEventListener("dragleave",onDragLeave);zone.addEventListener("drop",onDrop);return div;}
-function makeCardEl(card){const div=document.createElement("div");div.className=`card prio-${card.prio}`;div.dataset.cardid=card.id;div.draggable=true;const total=card.checkItems.length;const done=card.checkItems.filter(i=>i.done).length;const pct=total?Math.round(done/total*100):0;const prioMap={high:`<span class="tag tag-high">Hoch</span>`,mid:`<span class="tag tag-mid">Mittel</span>`,low:`<span class="tag tag-low">Niedrig</span>`};let dateHtml="";if(card.date){const d=new Date(card.date);const ov=d<new Date();dateHtml=`<div class="card-date${ov?" overdue":""}">${ov?"⚠":" 🗓"} ${d.toLocaleDateString("de-DE",{day:"numeric",month:"short"})}</div>`;}const initials=getInitials(card.owner);const color=getMemberColor(card.owner);div.innerHTML=`<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px"><div style="flex:1;min-width:0"><div class="card-tags">${prioMap[card.prio]||""}</div><div class="card-title">${card.title}</div>${card.note?`<div class="card-note">${card.note}</div>`:""}</div><button class="card-del-btn" onclick="delCard(event,'${card.id}')" title="Karte löschen">✕</button></div>${total?`<div class="cl-bar"><div class="cl-label"><span>Checkliste</span><span>${done}/${total}</span></div><div class="cl-track"><div class="cl-fill" style="width:${pct}%"></div></div></div>`:""}<div class="card-footer"><div class="card-meta">${card.owner?`<div class="avatar" style="width:22px;height:22px;font-size:9px;background:${color}">${initials}</div><span style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${card.owner}</span>`:`<span style="font-size:11px;color:var(--muted)">Nicht zugewiesen</span>`}</div>${dateHtml}</div>`;div.addEventListener("dragstart",e=>{dragCardEl=div;dragCardId=card.id;dragSrcColId=div.closest(".kanban-cards").dataset.colid;setTimeout(()=>div.classList.add("dragging"),0);e.dataTransfer.effectAllowed="move";});div.addEventListener("dragend",()=>{div.classList.remove("dragging");if(dropIndicator)dropIndicator.remove();dropIndicator=null;dragCardEl=null;dragCardId=null;dragSrcColId=null;});return div;}
+function makeCardEl(card){const div=document.createElement("div");div.className=`card prio-${card.prio}`;div.dataset.cardid=card.id;div.draggable=true;const total=card.checkItems.length;const done=card.checkItems.filter(i=>i.done).length;const pct=total?Math.round(done/total*100):0;const prioMap={high:`<span class="tag tag-high">Hoch</span>`,mid:`<span class="tag tag-mid">Mittel</span>`,low:`<span class="tag tag-low">Niedrig</span>`};let dateHtml="";if(card.date){const d=new Date(card.date);const ov=d<new Date();dateHtml=`<div class="card-date${ov?" overdue":""}">${ov?"⚠":" 🗓"} ${d.toLocaleDateString("de-DE",{day:"numeric",month:"short"})}</div>`;}const initials=getInitials(card.owner);const color=getMemberColor(card.owner);div.innerHTML=`<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px"><div style="flex:1;min-width:0"><div class="card-tags">${prioMap[card.prio]||""}</div><div class="card-title">${card.title}</div>${card.note?`<div class="card-note">${card.note}</div>`:""}</div><button class="card-del-btn" onclick="delCard(event,'${card.id}')" title="Karte löschen">✕</button></div>${total?`<div class="cl-bar"><div class="cl-label"><span>Checkliste</span><span>${done}/${total}</span></div><div class="cl-track"><div class="cl-fill" style="width:${pct}%"></div></div></div>`:""}<div class="card-footer"><div class="card-meta">${card.owner?`<div class="avatar" style="width:22px;height:22px;font-size:9px;background:${color}">${initials}</div><span style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${card.owner}</span>`:`<span style="font-size:11px;color:var(--muted)">Nicht zugewiesen</span>`}</div>${dateHtml}</div>`;div.addEventListener("dblclick",()=>openEditCard(card.id));div.addEventListener("dragstart",e=>{dragCardEl=div;dragCardId=card.id;dragSrcColId=div.closest(".kanban-cards").dataset.colid;setTimeout(()=>div.classList.add("dragging"),0);e.dataTransfer.effectAllowed="move";});div.addEventListener("dragend",()=>{div.classList.remove("dragging");if(dropIndicator)dropIndicator.remove();dropIndicator=null;dragCardEl=null;dragCardId=null;dragSrcColId=null;});return div;}
 function syncCount(colId){const col=findCol(colId);const el=document.getElementById("cnt-"+colId);if(el&&col)el.textContent=col.cardIds.length;}
 async function renameCol(colId){const col=findCol(colId);const name=prompt("Spalte umbenennen:",col.name);if(name&&name.trim()){col.name=name.trim();await sb.from("columns").update({name:name.trim()}).eq("id",colId);renderBoard();showToast("✓ Spalte umbenannt");}}
 async function delCol(colId){const col=findCol(colId);if(!confirm(`Spalte "${col.name}" löschen?`))return;await sb.from("columns").delete().eq("id",colId);const arr=getCols();arr.splice(arr.findIndex(c=>c.id===colId),1);renderBoard();showToast("✓ Spalte gelöscht");}
@@ -772,12 +844,13 @@ sb.from("cards").update({column_id:tgtColId,position:tgtCol.cardIds.indexOf(drag
 function getAfterEl(zone,y){return[...zone.querySelectorAll(".card:not(.dragging)")].reduce((cl,el)=>{const box=el.getBoundingClientRect();const off=y-box.top-box.height/2;if(off<0&&off>cl.off)return{off,el};return cl;},{off:Number.NEGATIVE_INFINITY}).el;}
 
 // ── MODAL ──────────────────────────────────────────────────────
-function openNewCard(colId){targetColId=colId||null;document.getElementById("modal").classList.add("open");setTimeout(()=>document.getElementById("m-title").focus(),50);}
+function openNewCard(colId){editingCardId=null;targetColId=colId||null;document.querySelector(".modal-title").textContent="Neue Aufgabe";document.querySelector("#modal .btn-primary").textContent="Erstellen";document.getElementById("modal").classList.add("open");setTimeout(()=>document.getElementById("m-title").focus(),50);}
+function openEditCard(cardId){const card=get("cards")[cardId];if(!card)return;editingCardId=cardId;document.querySelector(".modal-title").textContent="Aufgabe bearbeiten";document.querySelector("#modal .btn-primary").textContent="Speichern";document.getElementById("m-title").value=card.title;document.getElementById("m-note").value=card.note||"";document.getElementById("m-owner").value=card.owner||"";document.getElementById("m-date").value=card.date||"";updateModSelect();document.getElementById("m-module").value=card.moduleId||currentMod;document.querySelectorAll(".radio-option").forEach(o=>o.classList.remove("selected"));const prioEl=document.querySelector(".radio-option."+card.prio);if(prioEl)prioEl.classList.add("selected");const list=document.getElementById("m-checklist");list.innerHTML="";(card.checkItems||[]).forEach(ci=>{const item=document.createElement("div");item.className="cl-item";item.innerHTML="<input type=\"checkbox\"" + (ci.done?" checked":"") + "><span" + (ci.done?" class=\"done\"":"") + ">" + ci.text + "</span><button class=\"cl-item-del\" onclick=\"this.parentElement.remove()\">✕</button>";item.querySelector("input").onchange=function(){item.querySelector("span").classList.toggle("done",this.checked);};list.appendChild(item);});document.getElementById("modal").classList.add("open");setTimeout(()=>document.getElementById("m-title").focus(),50);}
 function closeModal(){document.getElementById("modal").classList.remove("open");}
 function closeModalOutside(e){if(e.target===document.getElementById("modal"))closeModal();}
 function setPrio(el){document.querySelectorAll(".radio-option").forEach(o=>o.classList.remove("selected"));el.classList.add("selected");}
 function addClItem(){const inp=document.getElementById("m-cl-input");if(!inp.value.trim())return;const list=document.getElementById("m-checklist");const item=document.createElement("div");item.className="cl-item";item.innerHTML=`<input type="checkbox"><span>${inp.value.trim()}</span><button class="cl-item-del" onclick="this.parentElement.remove()">✕</button>`;item.querySelector("input").onchange=function(){item.querySelector("span").classList.toggle("done",this.checked);};list.appendChild(item);inp.value="";inp.focus();}
-async function saveCard(){const title=document.getElementById("m-title").value.trim();if(!title){document.getElementById("m-title").focus();return;}const owner=document.getElementById("m-owner").value.trim();const date=document.getElementById("m-date").value;const note=document.getElementById("m-note").value.trim();const prio=document.querySelector("#modal .radio-option.selected").classList[1];const modId=document.getElementById("m-module").value||currentMod;const checkItems=[...document.getElementById("m-checklist").querySelectorAll(".cl-item")].map(i=>({text:i.querySelector("span").textContent,done:i.querySelector("input").checked}));if(owner)await addToTeam(owner);const id="k"+Date.now();const colId=targetColId||getCols()[0]?.id;const col=colId?findCol(colId):null;const position=col?col.cardIds.length:0;await sb.from("cards").insert({id,board_id:currentBoardId,column_id:colId,module_id:modId,title,note,owner,due_date:date,priority:prio,position,check_items:checkItems});get("cards")[id]={id,title,note,owner,date,prio,moduleId:modId,checkItems};if(col)col.cardIds.push(id);if(currentView==="kanban")renderBoard();else renderList();renderTeam();renderProgress();closeModal();showToast("✓ Aufgabe erstellt");["m-title","m-note","m-owner","m-date"].forEach(id=>document.getElementById(id).value="");document.getElementById("m-checklist").innerHTML="";document.querySelectorAll(".radio-option").forEach(o=>o.classList.remove("selected"));document.querySelector(".radio-option.high").classList.add("selected");}
+async function saveCard(){const title=document.getElementById("m-title").value.trim();if(!title){document.getElementById("m-title").focus();return;}const owner=document.getElementById("m-owner").value.trim();const date=document.getElementById("m-date").value;const note=document.getElementById("m-note").value.trim();const prio=document.querySelector("#modal .radio-option.selected").classList[1];const modId=document.getElementById("m-module").value||currentMod;const checkItems=[...document.getElementById("m-checklist").querySelectorAll(".cl-item")].map(i=>({text:i.querySelector("span").textContent,done:i.querySelector("input").checked}));if(owner)await addToTeam(owner);if(editingCardId){const card=get("cards")[editingCardId];card.title=title;card.note=note;card.owner=owner;card.date=date;card.prio=prio;card.checkItems=checkItems;await sb.from("cards").update({title,note,owner,due_date:date,priority:prio,check_items:checkItems}).eq("id",editingCardId);showToast("✓ Aufgabe aktualisiert");}else{const id="k"+Date.now();const colId=targetColId||getCols()[0]?.id;const col=colId?findCol(colId):null;const position=col?col.cardIds.length:0;await sb.from("cards").insert({id,board_id:currentBoardId,column_id:colId,module_id:modId,title,note,owner,due_date:date,priority:prio,position,check_items:checkItems});get("cards")[id]={id,title,note,owner,date,prio,moduleId:modId,checkItems};if(col)col.cardIds.push(id);showToast("✓ Aufgabe erstellt");}if(currentView==="kanban")renderBoard();else renderList();renderTeam();renderProgress();closeModal();editingCardId=null;["m-title","m-note","m-owner","m-date"].forEach(id=>document.getElementById(id).value="");document.getElementById("m-checklist").innerHTML="";document.querySelectorAll(".radio-option").forEach(o=>o.classList.remove("selected"));document.querySelector(".radio-option.high").classList.add("selected");}
 
 // ── AUTOCOMPLETE ──────────────────────────────────────────────
 function filterAC(){const val=document.getElementById("m-owner").value.toLowerCase();const ac=document.getElementById("owner-ac");const matches=get("team").filter(m=>m.name.toLowerCase().includes(val));if(!val||matches.length===0){ac.classList.remove("open");return;}ac.innerHTML=matches.map(m=>`<div class="ac-item" onmousedown="pickAC('${m.name}')"><div class="avatar" style="width:20px;height:20px;font-size:9px;background:${m.color}">${m.initials}</div>${m.name}</div>`).join("");ac.classList.add("open");}
