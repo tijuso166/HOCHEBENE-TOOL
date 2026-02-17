@@ -843,7 +843,12 @@ function loadEventDate(){
 function renderCountdown(dateStr){
   const el = document.getElementById("event-countdown");
   if(!el) return;
-  if(!dateStr){ el.style.display="none"; return; }
+  const isAdmin = sessionStorage.getItem("he_role") === "admin";
+  if(!dateStr){
+    if(isAdmin){ el.style.display="flex"; el.innerHTML=`<span style="color:var(--muted)">📅</span> <span style="color:var(--muted)">Datum setzen</span>`; }
+    else { el.style.display="none"; }
+    return;
+  }
   const diff = Math.ceil((new Date(dateStr) - new Date()) / 86400000);
   el.style.display = "flex";
   if(diff > 0){
