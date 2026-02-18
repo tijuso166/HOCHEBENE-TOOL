@@ -204,6 +204,10 @@ header { background: #0a0a0d; border-bottom: 1px solid var(--border); padding: 0
 .cl-add input:focus { border-color: var(--accent); }
 .cl-add button { padding: 6px 12px; background: var(--surface3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); cursor: pointer; font-size: 13px; font-family: "DM Sans", sans-serif; }
 .cl-add button:hover { border-color: var(--accent); color: var(--accent); }
+.cl-item { cursor: default; }
+.cl-drag-handle { color: var(--muted); cursor: grab; font-size: 13px; padding: 0 2px; user-select: none; flex-shrink: 0; }
+.cl-drag-handle:active { cursor: grabbing; }
+.cl-item.drag-over-cl { border-top: 2px solid var(--accent); }
 .toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface3); border: 1px solid var(--accent3); border-radius: 9px; padding: 10px 16px; font-size: 13px; color: var(--accent3); z-index: 999; transform: translateY(70px); transition: transform 0.28s cubic-bezier(.22,.68,0,1.2); pointer-events: none; }
 .toast.show { transform: translateY(0); }
 ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -272,6 +276,7 @@ header { background: #0a0a0d; border-bottom: 1px solid var(--border); padding: 0
     <div class="board-header">
       <div>
         <div class="breadcrumb" id="breadcrumb"></div>
+        <div id="filter-chip" style="display:none;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--accent);border-radius:8px;padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:1px;margin-top:4px;"></div>
         <div class="board-title-group">
           <div class="board-title" id="board-title" title="Doppelklick zum Umbenennen" ondblclick="renameCurrentModule()">—</div>
           <div class="owner-chip" id="owner-chip" onclick="toggleOwnerDD(event)">
@@ -380,7 +385,9 @@ let currentMod = null;
 let currentView = "kanban";
 let targetColId = null;
 let editingCardId = null;
+let filterMember = null;
 let dragCardEl=null, dragCardId=null, dragSrcColId=null, dropIndicator=null;
+let dragColId=null, dragColEl=null;
 
 // ── SUPABASE ──────────────────────────────────────────────────
 const SUPA_URL = "https://olbjelxyeabslimuwsxg.supabase.co";
@@ -442,13 +449,17 @@ async function addBoard() {
   showToast("✓ Board erstellt: "+name.trim());
 }
 
+async function deleteBoard(id){const b=boards.find(x=>x.id===id);if(!b)return;if(!confirm(`Board "${b.name}" und ALLE Daten löschen?`))return;await sb.from("boards").delete().eq("id",id);boards=boards.filter(x=>x.id!==id);if(currentBoardId===id&&boards.length>0)await switchBoard(boards[0].id);else renderBoardTabs();showToast("✓ Board gelöscht");}
 function renderBoardTabs() {
   const sw = document.getElementById("board-switcher");
   sw.innerHTML = "";
+  const isAdmin=sessionStorage.getItem("he_role")==="admin";
   boards.forEach(b => {
     const btn = document.createElement("button");
     btn.className = "board-tab" + (b.id===currentBoardId?" active":"");
+    btn.style.cssText="display:flex;align-items:center;gap:6px;";
     btn.textContent = b.name;
+    if(isAdmin&&boards.length>1){const x=document.createElement("span");x.textContent="✕";x.style.cssText="font-size:10px;color:var(--muted);margin-left:2px;padding:0 2px;border-radius:3px;";x.title="Board löschen";x.onmouseenter=()=>x.style.color="var(--danger)";x.onmouseleave=()=>x.style.color="var(--muted)";x.onclick=e=>{e.stopPropagation();deleteBoard(b.id);};btn.appendChild(x);}
     btn.ondblclick = async () => {
       const n = prompt("Board umbenennen:", b.name);
       if(n&&n.trim()){b.name=n.trim();await sb.from("boards").update({name:n.trim()}).eq("id",b.id);renderBoardTabs();showToast("✓ "+b.name);}
@@ -497,8 +508,9 @@ async function loadBoardData(boardId) {
       if(col) col.cardIds.push(c.id);
     }
   });
-  // Sort cards within columns by position
+  // Sort cards within columns by position + deduplicate
   Object.values(board.colsByMod).forEach(cols => cols.forEach(col => {
+    col.cardIds = [...new Set(col.cardIds)];
     col.cardIds.sort((a,b) => {
       const pa = board.cards[a]?cardData.find(c=>c.id===a)?.position||0:0;
       const pb = board.cards[b]?cardData.find(c=>c.id===b)?.position||0:0;
@@ -557,12 +569,14 @@ function initOffline() {
 }
 
 // ── REALTIME SYNC ─────────────────────────────────────────────
+let realtimeTimer=null;
+function scheduleReload(extra){clearTimeout(realtimeTimer);realtimeTimer=setTimeout(async()=>{await loadBoardData(currentBoardId);if(currentView==="kanban")renderBoard();else renderList();renderProgress();if(extra)extra();},350);}
 function setupRealtime() {
   sb.channel("hochebene-changes")
-    .on("postgres_changes", {event:"*", schema:"public", table:"cards"},    async () => { await loadBoardData(currentBoardId); if(currentView==="kanban") renderBoard(); else renderList(); renderProgress(); })
-    .on("postgres_changes", {event:"*", schema:"public", table:"columns"},  async () => { await loadBoardData(currentBoardId); if(currentView==="kanban") renderBoard(); else renderList(); })
-    .on("postgres_changes", {event:"*", schema:"public", table:"modules"},  async () => { await loadBoardData(currentBoardId); renderTree(); renderProgress(); })
-    .on("postgres_changes", {event:"*", schema:"public", table:"team_members"}, async () => { await loadBoardData(currentBoardId); renderTeam(); })
+    .on("postgres_changes", {event:"*", schema:"public", table:"cards"},    ()=>scheduleReload())
+    .on("postgres_changes", {event:"*", schema:"public", table:"columns"},  ()=>scheduleReload())
+    .on("postgres_changes", {event:"*", schema:"public", table:"modules"},  ()=>scheduleReload(()=>{renderTree();renderProgress();}))
+    .on("postgres_changes", {event:"*", schema:"public", table:"team_members"}, ()=>scheduleReload(()=>renderTeam()))
     .subscribe();
 }
 
@@ -688,7 +702,7 @@ function selectMod(id) {
 }
 async function renameModBtn(e,id){e.stopPropagation();const mod=findMod(id);const name=prompt("Modul umbenennen:",mod.name);if(name&&name.trim()){mod.name=name.trim();await sb.from("modules").update({name:name.trim()}).eq("id",id);if(currentMod===id)document.getElementById("board-title").textContent=mod.name;renderTree();updateModSelect();showToast("✓ "+mod.name);}}
 function renameCurrentModule(){renameModBtn({stopPropagation:()=>{}},currentMod);}
-async function createDefaultCols(modId){const defaults=[{id:"col"+modId+"_1",name:"To Do",color:"#6b6b88",position:0},{id:"col"+modId+"_2",name:"In Bearbeitung",color:"#ff6b2b",position:1},{id:"col"+modId+"_3",name:"Erledigt",color:"#06d6a0",position:2}];await sb.from("columns").insert(defaults.map(c=>({id:c.id,board_id:currentBoardId,module_id:modId,name:c.name,color:c.color,position:c.position})));get("colsByMod")[modId]=defaults.map(c=>({id:c.id,name:c.name,color:c.color,cardIds:[]}));}
+async function createDefaultCols(modId){const defaults=[{id:"col"+modId+"_0",name:"Backlog",color:"#4b5563",position:0},{id:"col"+modId+"_1",name:"To Do",color:"#6b6b88",position:1},{id:"col"+modId+"_2",name:"In Bearbeitung",color:"#ff6b2b",position:2},{id:"col"+modId+"_3",name:"Erledigt",color:"#06d6a0",position:3}];await sb.from("columns").insert(defaults.map(c=>({id:c.id,board_id:currentBoardId,module_id:modId,name:c.name,color:c.color,position:c.position})));get("colsByMod")[modId]=defaults.map(c=>({id:c.id,name:c.name,color:c.color,cardIds:[]}));}
 async function addRootModule(){const name=prompt("Name des neuen Moduls:");if(!name||!name.trim())return;const id="m"+Date.now();const color=nextColor();await sb.from("modules").insert({id,board_id:currentBoardId,parent_id:null,name:name.trim(),color,owner:"",position:get("modules").length});await createDefaultCols(id);get("modules").push({id,name:name.trim(),color,owner:"",children:[]});renderTree();updateModSelect();showToast("✓ Modul: "+name.trim());}
 async function addSubMod(e,pid){e.stopPropagation();const name=prompt("Name des Unterprojekts:");if(!name||!name.trim())return;const p=findMod(pid);const id="s"+Date.now();const color=p.color.substring(0,7)+"99";await sb.from("modules").insert({id,board_id:currentBoardId,parent_id:pid,name:name.trim(),color,owner:"",position:p.children.length});await createDefaultCols(id);p.children.push({id,name:name.trim(),color,owner:"",children:[]});renderTree();updateModSelect();showToast("✓ "+name.trim());}
 async function delMod(e,id){e.stopPropagation();const mod=findMod(id);if(!confirm(`Modul "${mod.name}" löschen?`))return;await sb.from("modules").delete().eq("id",id);const res=findParentArr(id);if(res)res.arr.splice(res.idx,1);if(currentMod===id)selectMod(get("modules")[0]?.id||"");renderTree();updateModSelect();showToast("✓ Entfernt");}
@@ -702,7 +716,7 @@ function renderBoard() {
   cols.forEach(col => kanban.insertBefore(makeColEl(col), addBtn));
   cols.forEach(col => {
     const cardsEl = document.getElementById("cc-"+col.id);
-    col.cardIds.forEach(cid=>{ if(get("cards")[cid]) cardsEl.appendChild(makeCardEl(get("cards")[cid])); });
+    col.cardIds.forEach(cid=>{ const card=get("cards")[cid]; if(card&&(!filterMember||card.owner===filterMember)) cardsEl.appendChild(makeCardEl(card)); });
     syncCount(col.id);
   });
 }
@@ -710,7 +724,7 @@ function getCols(){
   if(!get("colsByMod")[currentMod]){
     get("colsByMod")[currentMod]=[];
     // Create default columns in Supabase
-    const defaults=[{id:"col"+currentMod+"_1",name:"To Do",color:"#6b6b88",pos:0},{id:"col"+currentMod+"_2",name:"In Bearbeitung",color:"#ff6b2b",pos:1},{id:"col"+currentMod+"_3",name:"Erledigt",color:"#06d6a0",pos:2}];
+    const defaults=[{id:"col"+currentMod+"_0",name:"Backlog",color:"#4b5563",pos:0},{id:"col"+currentMod+"_1",name:"To Do",color:"#6b6b88",pos:1},{id:"col"+currentMod+"_2",name:"In Bearbeitung",color:"#ff6b2b",pos:2},{id:"col"+currentMod+"_3",name:"Erledigt",color:"#06d6a0",pos:3}];
     defaults.forEach(c=>{
       get("colsByMod")[currentMod].push({id:c.id,name:c.name,color:c.color,cardIds:[]});
       sb.from("columns").insert({id:c.id,board_id:currentBoardId,module_id:currentMod,name:c.name,color:c.color,position:c.pos});
@@ -719,7 +733,7 @@ function getCols(){
   return get("colsByMod")[currentMod];
 }
 function findCol(colId){for(const mid in get("colsByMod")){const c=get("colsByMod")[mid].find(c=>c.id===colId);if(c)return c;}return null;}
-function makeColEl(col){const div=document.createElement("div");div.className="kanban-col";div.dataset.colid=col.id;div.innerHTML=`<div class="kanban-col-header"><div class="col-title"><div class="col-dot" style="background:${col.color}"></div><span class="col-title-text" ondblclick="renameCol('${col.id}')" title="Doppelklick umbenennen">${col.name}</span></div><span class="col-count" id="cnt-${col.id}">0</span><button class="col-del" onclick="delCol('${col.id}')">✕</button></div><div class="kanban-cards" id="cc-${col.id}" data-colid="${col.id}"></div><button class="add-card-btn" onclick="openNewCard('${col.id}')">＋ Aufgabe hinzufügen</button>`;const zone=div.querySelector(".kanban-cards");zone.addEventListener("dragover",onDragOver);zone.addEventListener("dragleave",onDragLeave);zone.addEventListener("drop",onDrop);return div;}
+function makeColEl(col){const div=document.createElement("div");div.className="kanban-col";div.dataset.colid=col.id;div.dataset.type="col";div.innerHTML=`<div class="kanban-col-header"><div class="col-title"><div class="col-dot" style="background:${col.color}"></div><span class="col-title-text" ondblclick="renameCol('${col.id}')" title="Doppelklick umbenennen">${col.name}</span></div><span class="col-count" id="cnt-${col.id}">0</span><button class="col-del" onclick="delCol('${col.id}')">✕</button></div><div class="kanban-cards" id="cc-${col.id}" data-colid="${col.id}"></div><button class="add-card-btn" onclick="openNewCard('${col.id}')">＋ Aufgabe hinzufügen</button>`;const zone=div.querySelector(".kanban-cards");zone.addEventListener("dragover",onDragOver);zone.addEventListener("dragleave",onDragLeave);zone.addEventListener("drop",onDrop);const header=div.querySelector(".kanban-col-header");header.style.cursor="grab";div.addEventListener("dragstart",e=>{if(e.target.closest(".kanban-cards")||dragCardId)return;dragColId=col.id;dragColEl=div;setTimeout(()=>div.style.opacity="0.5",0);e.dataTransfer.effectAllowed="move";});div.addEventListener("dragend",()=>{div.style.opacity="";dragColId=null;dragColEl=null;});div.addEventListener("dragover",e=>{if(!dragColId||dragColId===col.id)return;e.preventDefault();div.style.boxShadow="2px 0 0 var(--accent)";});div.addEventListener("dragleave",()=>{div.style.boxShadow="";});div.addEventListener("drop",e=>{if(!dragColId||dragColId===col.id)return;e.preventDefault();e.stopPropagation();div.style.boxShadow="";const cols=getCols();const fromIdx=cols.findIndex(c=>c.id===dragColId);const toIdx=cols.findIndex(c=>c.id===col.id);if(fromIdx===-1||toIdx===-1)return;const[moved]=cols.splice(fromIdx,1);cols.splice(toIdx,0,moved);cols.forEach((c,i)=>{c.position=i;sb.from("columns").update({position:i}).eq("id",c.id);});renderBoard();});return div;}
 function makeCardEl(card){const div=document.createElement("div");div.className=`card prio-${card.prio}`;div.dataset.cardid=card.id;div.draggable=true;const total=card.checkItems.length;const done=card.checkItems.filter(i=>i.done).length;const pct=total?Math.round(done/total*100):0;const prioMap={high:`<span class="tag tag-high">Hoch</span>`,mid:`<span class="tag tag-mid">Mittel</span>`,low:`<span class="tag tag-low">Niedrig</span>`};let dateHtml="";if(card.date){const d=new Date(card.date);const ov=d<new Date();dateHtml=`<div class="card-date${ov?" overdue":""}">${ov?"⚠":" 🗓"} ${d.toLocaleDateString("de-DE",{day:"numeric",month:"short"})}</div>`;}const initials=getInitials(card.owner);const color=getMemberColor(card.owner);div.innerHTML=`<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px"><div style="flex:1;min-width:0"><div class="card-tags">${prioMap[card.prio]||""}</div><div class="card-title">${card.title}</div>${card.note?`<div class="card-note">${card.note}</div>`:""}</div><button class="card-del-btn" onclick="delCard(event,'${card.id}')" title="Karte löschen">✕</button></div>${total?`<div class="cl-bar"><div class="cl-label"><span>Checkliste</span><span>${done}/${total}</span></div><div class="cl-track"><div class="cl-fill" style="width:${pct}%"></div></div></div>`:""}<div class="card-footer"><div class="card-meta">${card.owner?`<div class="avatar" style="width:22px;height:22px;font-size:9px;background:${color}">${initials}</div><span style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${card.owner}</span>`:`<span style="font-size:11px;color:var(--muted)">Nicht zugewiesen</span>`}</div>${dateHtml}</div>`;div.addEventListener("dblclick",()=>openEditCard(card.id));div.addEventListener("dragstart",e=>{dragCardEl=div;dragCardId=card.id;dragSrcColId=div.closest(".kanban-cards").dataset.colid;setTimeout(()=>div.classList.add("dragging"),0);e.dataTransfer.effectAllowed="move";});div.addEventListener("dragend",()=>{div.classList.remove("dragging");if(dropIndicator)dropIndicator.remove();dropIndicator=null;dragCardEl=null;dragCardId=null;dragSrcColId=null;});return div;}
 function syncCount(colId){const col=findCol(colId);const el=document.getElementById("cnt-"+colId);if(el&&col)el.textContent=col.cardIds.length;}
 async function renameCol(colId){const col=findCol(colId);const name=prompt("Spalte umbenennen:",col.name);if(name&&name.trim()){col.name=name.trim();await sb.from("columns").update({name:name.trim()}).eq("id",colId);renderBoard();showToast("✓ Spalte umbenannt");}}
@@ -789,19 +803,21 @@ async function delCard(e, cardId) {
 }
 
 // ── DRAG & DROP ──────────────────────────────────────────────
+function findColModule(colId){for(const mid in get("colsByMod")){if(get("colsByMod")[mid].find(c=>c.id===colId))return mid;}return null;}
 function onDragOver(e){e.preventDefault();e.dataTransfer.dropEffect="move";this.closest(".kanban-col").classList.add("drag-over-col");if(!dropIndicator){dropIndicator=document.createElement("div");dropIndicator.className="drop-indicator";}const after=getAfterEl(this,e.clientY);if(after)this.insertBefore(dropIndicator,after);else this.appendChild(dropIndicator);}
 function onDragLeave(e){if(!this.contains(e.relatedTarget))this.closest(".kanban-col").classList.remove("drag-over-col");}
-function onDrop(e){e.preventDefault();const zone=this;zone.closest(".kanban-col").classList.remove("drag-over-col");if(!dragCardEl||!dragCardId)return;const tgtColId=zone.dataset.colid;const srcCol=findCol(dragSrcColId);if(srcCol)srcCol.cardIds=srcCol.cardIds.filter(c=>c!==dragCardId);const tgtCol=findCol(tgtColId);if(!tgtCol)return;let afterId=null;if(dropIndicator){const next=dropIndicator.nextElementSibling;if(next&&next.dataset.cardid)afterId=next.dataset.cardid;}if(afterId){const idx=tgtCol.cardIds.indexOf(afterId);tgtCol.cardIds.splice(idx,0,dragCardId);}else{tgtCol.cardIds.push(dragCardId);}if(dropIndicator){const next=dropIndicator.nextElementSibling;dropIndicator.remove();if(next)zone.insertBefore(dragCardEl,next);else zone.appendChild(dragCardEl);}dropIndicator=null;syncCount(dragSrcColId);syncCount(tgtColId);renderProgress();// Save new column + positions to Supabase
-sb.from("cards").update({column_id:tgtColId,position:tgtCol.cardIds.indexOf(dragCardId)}).eq("id",dragCardId).then(()=>{tgtCol.cardIds.forEach((cid,i)=>sb.from("cards").update({position:i}).eq("id",cid));});}
+function onDrop(e){e.preventDefault();const zone=this;zone.closest(".kanban-col").classList.remove("drag-over-col");if(dragColId)return;if(!dragCardEl||!dragCardId)return;const tgtColId=zone.dataset.colid;const srcCol=findCol(dragSrcColId);if(srcCol)srcCol.cardIds=srcCol.cardIds.filter(c=>c!==dragCardId);const tgtCol=findCol(tgtColId);if(!tgtCol)return;let afterId=null;if(dropIndicator){const next=dropIndicator.nextElementSibling;if(next&&next.dataset.cardid)afterId=next.dataset.cardid;}if(afterId){const idx=tgtCol.cardIds.indexOf(afterId);tgtCol.cardIds.splice(idx,0,dragCardId);}else{tgtCol.cardIds.push(dragCardId);}if(dropIndicator){const next=dropIndicator.nextElementSibling;dropIndicator.remove();if(next)zone.insertBefore(dragCardEl,next);else zone.appendChild(dragCardEl);}dropIndicator=null;syncCount(dragSrcColId);syncCount(tgtColId);renderProgress();// Save new column + positions to Supabase
+const movedCard=get("cards")[dragCardId];const newModId=findColModule(tgtColId);if(movedCard&&newModId&&movedCard.moduleId!==newModId){movedCard.moduleId=newModId;sb.from("cards").update({column_id:tgtColId,module_id:newModId,position:tgtCol.cardIds.indexOf(dragCardId)}).eq("id",dragCardId).then(()=>{tgtCol.cardIds.forEach((cid,i)=>sb.from("cards").update({position:i}).eq("id",cid));});}else{sb.from("cards").update({column_id:tgtColId,position:tgtCol.cardIds.indexOf(dragCardId)}).eq("id",dragCardId).then(()=>{tgtCol.cardIds.forEach((cid,i)=>sb.from("cards").update({position:i}).eq("id",cid));});}}
 function getAfterEl(zone,y){return[...zone.querySelectorAll(".card:not(.dragging)")].reduce((cl,el)=>{const box=el.getBoundingClientRect();const off=y-box.top-box.height/2;if(off<0&&off>cl.off)return{off,el};return cl;},{off:Number.NEGATIVE_INFINITY}).el;}
 
 // ── MODAL ──────────────────────────────────────────────────────
-function openNewCard(colId){editingCardId=null;targetColId=colId||null;document.querySelector(".modal-title").textContent="Neue Aufgabe";document.querySelector("#modal .btn-primary").textContent="Erstellen";document.getElementById("modal").classList.add("open");setTimeout(()=>document.getElementById("m-title").focus(),50);}
-function openEditCard(cardId){const card=get("cards")[cardId];if(!card)return;editingCardId=cardId;document.querySelector(".modal-title").textContent="Aufgabe bearbeiten";document.querySelector("#modal .btn-primary").textContent="Speichern";document.getElementById("m-title").value=card.title;document.getElementById("m-note").value=card.note||"";document.getElementById("m-owner").value=card.owner||"";document.getElementById("m-date").value=card.date||"";updateModSelect();document.getElementById("m-module").value=card.moduleId||currentMod;document.querySelectorAll(".radio-option").forEach(o=>o.classList.remove("selected"));const prioEl=document.querySelector(".radio-option."+card.prio);if(prioEl)prioEl.classList.add("selected");const list=document.getElementById("m-checklist");list.innerHTML="";(card.checkItems||[]).forEach(ci=>{const item=document.createElement("div");item.className="cl-item";item.innerHTML="<input type=\"checkbox\"" + (ci.done?" checked":"") + "><span" + (ci.done?" class=\"done\"":"") + ">" + ci.text + "</span><button class=\"cl-item-del\" onclick=\"this.parentElement.remove()\">✕</button>";item.querySelector("input").onchange=function(){item.querySelector("span").classList.toggle("done",this.checked);};list.appendChild(item);});document.getElementById("modal").classList.add("open");setTimeout(()=>document.getElementById("m-title").focus(),50);}
+function openNewCard(colId){editingCardId=null;targetColId=colId||null;document.querySelector(".modal-title").textContent="Neue Aufgabe";document.querySelector("#modal .btn-primary").textContent="Erstellen";["m-title","m-note","m-owner","m-date"].forEach(id=>document.getElementById(id).value="");document.getElementById("m-checklist").innerHTML="";document.getElementById("m-cl-input").value="";document.querySelectorAll(".radio-option").forEach(o=>o.classList.remove("selected"));document.querySelector(".radio-option.high").classList.add("selected");updateModSelect();document.getElementById("modal").classList.add("open");setTimeout(()=>document.getElementById("m-title").focus(),50);}
+function openEditCard(cardId){const card=get("cards")[cardId];if(!card)return;editingCardId=cardId;document.querySelector(".modal-title").textContent="Aufgabe bearbeiten";document.querySelector("#modal .btn-primary").textContent="Speichern";document.getElementById("m-title").value=card.title;document.getElementById("m-note").value=card.note||"";document.getElementById("m-owner").value=card.owner||"";document.getElementById("m-date").value=card.date||"";updateModSelect();document.getElementById("m-module").value=card.moduleId||currentMod;document.querySelectorAll(".radio-option").forEach(o=>o.classList.remove("selected"));const prioEl=document.querySelector(".radio-option."+card.prio);if(prioEl)prioEl.classList.add("selected");const list=document.getElementById("m-checklist");list.innerHTML="";(card.checkItems||[]).forEach(ci=>{list.appendChild(makeClItem(ci.text,ci.done));});document.getElementById("modal").classList.add("open");setTimeout(()=>document.getElementById("m-title").focus(),50);}
 function closeModal(){document.getElementById("modal").classList.remove("open");}
 function closeModalOutside(e){if(e.target===document.getElementById("modal"))closeModal();}
 function setPrio(el){document.querySelectorAll(".radio-option").forEach(o=>o.classList.remove("selected"));el.classList.add("selected");}
-function addClItem(){const inp=document.getElementById("m-cl-input");if(!inp.value.trim())return;const list=document.getElementById("m-checklist");const item=document.createElement("div");item.className="cl-item";item.innerHTML=`<input type="checkbox"><span>${inp.value.trim()}</span><button class="cl-item-del" onclick="this.parentElement.remove()">✕</button>`;item.querySelector("input").onchange=function(){item.querySelector("span").classList.toggle("done",this.checked);};list.appendChild(item);inp.value="";inp.focus();}
+function makeClItem(text, done){const item=document.createElement("div");item.className="cl-item";item.draggable=true;item.innerHTML=`<span class="cl-drag-handle">⠿</span><input type="checkbox"${done?" checked":""}><span${done?' class="done"':''}>${text}</span><button class="cl-item-del" onclick="this.parentElement.remove()">✕</button>`;item.querySelector("input").onchange=function(){item.querySelector("span:not(.cl-drag-handle)").classList.toggle("done",this.checked);};item.addEventListener("dragstart",e=>{e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain","cl");item._clDragging=true;setTimeout(()=>item.style.opacity="0.4",0);});item.addEventListener("dragend",()=>{item.style.opacity="";item._clDragging=false;document.querySelectorAll(".cl-item").forEach(i=>i.classList.remove("drag-over-cl"));});item.addEventListener("dragover",e=>{if(!document.querySelector(".cl-item[style*='opacity']"))return;e.preventDefault();document.querySelectorAll(".cl-item").forEach(i=>i.classList.remove("drag-over-cl"));item.classList.add("drag-over-cl");});item.addEventListener("drop",e=>{e.preventDefault();item.classList.remove("drag-over-cl");const dragging=document.querySelector(".cl-item[style*='opacity']");if(!dragging||dragging===item)return;const list=document.getElementById("m-checklist");list.insertBefore(dragging,item);dragging.style.opacity="";});return item;}
+function addClItem(){const inp=document.getElementById("m-cl-input");if(!inp.value.trim())return;const list=document.getElementById("m-checklist");list.appendChild(makeClItem(inp.value.trim(),false));inp.value="";inp.focus();}
 async function saveCard(){const title=document.getElementById("m-title").value.trim();if(!title){document.getElementById("m-title").focus();return;}const owner=document.getElementById("m-owner").value.trim();const date=document.getElementById("m-date").value;const note=document.getElementById("m-note").value.trim();const prio=document.querySelector("#modal .radio-option.selected").classList[1];const modId=document.getElementById("m-module").value||currentMod;const checkItems=[...document.getElementById("m-checklist").querySelectorAll(".cl-item")].map(i=>({text:i.querySelector("span").textContent,done:i.querySelector("input").checked}));if(owner)await addToTeam(owner);if(editingCardId){const card=get("cards")[editingCardId];card.title=title;card.note=note;card.owner=owner;card.date=date;card.prio=prio;card.checkItems=checkItems;await sb.from("cards").update({title,note,owner,due_date:date,priority:prio,check_items:checkItems}).eq("id",editingCardId);showToast("✓ Aufgabe aktualisiert");}else{const id="k"+Date.now();const colId=targetColId||getCols()[0]?.id;const col=colId?findCol(colId):null;const position=col?col.cardIds.length:0;await sb.from("cards").insert({id,board_id:currentBoardId,column_id:colId,module_id:modId,title,note,owner,due_date:date,priority:prio,position,check_items:checkItems});get("cards")[id]={id,title,note,owner,date,prio,moduleId:modId,checkItems};if(col)col.cardIds.push(id);showToast("✓ Aufgabe erstellt");}if(currentView==="kanban")renderBoard();else renderList();renderTeam();renderProgress();closeModal();editingCardId=null;["m-title","m-note","m-owner","m-date"].forEach(id=>document.getElementById(id).value="");document.getElementById("m-checklist").innerHTML="";document.querySelectorAll(".radio-option").forEach(o=>o.classList.remove("selected"));document.querySelector(".radio-option.high").classList.add("selected");}
 
 // ── AUTOCOMPLETE ──────────────────────────────────────────────
@@ -814,7 +830,8 @@ function getInitials(name){return name?name.split(" ").map(w=>w[0]).join("").sub
 function getMemberColor(name){const m=get("team").find(t=>t.name===name);return m?m.color:"#6b6b88";}
 async function addToTeam(name){if(!name||get("team").find(t=>t.name.toLowerCase()===name.toLowerCase()))return;const id="tm"+Date.now();const color=nextColor();await sb.from("team_members").insert({id,board_id:currentBoardId,name,color});get("team").push({name,initials:getInitials(name),color,_db_id:id});renderTeam();}
 async function addTeamMember(){const name=prompt("Name der Person:");if(!name||!name.trim())return;await addToTeam(name.trim());showToast("👤 "+name.trim()+" hinzugefügt");}
-function renderTeam(){const list=document.getElementById("team-list");list.innerHTML="";get("team").forEach(m=>{const div=document.createElement("div");div.className="team-member";div.innerHTML=`<div class="avatar" style="width:26px;height:26px;font-size:10px;background:${m.color}">${m.initials}</div><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.name}</span><button class="team-member-del" title="Entfernen" onclick="delTeamMember('${m.name}')">✕</button>`;list.appendChild(div);});document.getElementById("team-count").textContent=`(${get("team").length})`;}
+function setMemberFilter(name){filterMember=filterMember===name?null:name;renderTeam();if(currentView==="kanban")renderBoard();else renderList();const chip=document.getElementById("filter-chip");if(chip){if(filterMember){chip.style.display="flex";chip.innerHTML=`<span style="color:var(--accent2)">👤</span> <span>${filterMember}</span> <span style="cursor:pointer;color:var(--muted);margin-left:4px" onclick="setMemberFilter(null)">✕</span>`;}else{chip.style.display="none";}}}
+function renderTeam(){const list=document.getElementById("team-list");list.innerHTML="";get("team").forEach(m=>{const div=document.createElement("div");div.className="team-member";div.style.cursor="pointer";if(filterMember===m.name)div.style.cssText="cursor:pointer;background:var(--surface3);border-radius:6px;outline:1px solid var(--accent);";div.innerHTML=`<div class="avatar" style="width:26px;height:26px;font-size:10px;background:${m.color}">${m.initials}</div><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.name}</span><button class="team-member-del" title="Entfernen" onclick="event.stopPropagation();delTeamMember('${m.name}')">✕</button>`;div.onclick=()=>setMemberFilter(m.name);list.appendChild(div);});document.getElementById("team-count").textContent=`(${get("team").length})`;}
 async function delTeamMember(name){const idx=get("team").findIndex(t=>t.name===name);if(idx===-1)return;const assigned=Object.values(get("cards")).filter(c=>c.owner===name);if(assigned.length>0&&!confirm(`"${name}" ist ${assigned.length} Aufgabe(n) zugewiesen. Trotzdem entfernen?`))return;const member=get("team")[idx];if(member._db_id){await sb.from("team_members").delete().eq("id",member._db_id);}else{await sb.from("team_members").delete().eq("board_id",currentBoardId).eq("name",name);}get("team").splice(idx,1);renderTeam();if(currentView==="kanban")renderBoard();else renderList();showToast(`✓ ${name} entfernt`);}
 
 // ── OWNER CHIP ────────────────────────────────────────────────
@@ -845,19 +862,23 @@ function renderCountdown(dateStr){
   if(!el) return;
   const isAdmin = sessionStorage.getItem("he_role") === "admin";
   if(!dateStr){
-    if(isAdmin){ el.style.display="flex"; el.innerHTML=`<span style="color:var(--muted)">📅</span> <span style="color:var(--muted)">Datum setzen</span>`; }
+    if(isAdmin){ el.style.display="flex"; el.style.cursor="pointer"; el.innerHTML=`<span style="color:var(--muted)">📅</span> <span style="color:var(--muted)">Datum setzen</span>`; }
     else { el.style.display="none"; }
     return;
   }
   const diff = Math.ceil((new Date(dateStr) - new Date()) / 86400000);
   el.style.display = "flex";
+  el.style.cursor = isAdmin ? "pointer" : "default";
+  el.title = isAdmin ? "Eventdatum bearbeiten" : "";
   if(diff > 0){
     el.innerHTML = `<span style="color:var(--accent2)">⏳</span> <span>${diff} Tage</span>`;
     el.style.color = diff <= 14 ? "var(--danger)" : "var(--text)";
   } else if(diff === 0){
     el.innerHTML = `<span style="color:var(--accent3)">🎉</span> <span>Heute!</span>`;
+    el.style.color = "var(--text)";
   } else {
     el.innerHTML = `<span style="color:var(--muted)">✓</span> <span style="color:var(--muted)">Event vorbei</span>`;
+    el.style.color = "var(--text)";
   }
 }
 function editEventDate(){
