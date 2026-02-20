@@ -82,8 +82,12 @@ header { background: #0a0a0d; border-bottom: 1px solid var(--border); padding: 0
 .kanban-container { flex: 1; overflow-x: auto; overflow-y: hidden; padding: 16px 20px; display: flex; gap: 14px; align-items: flex-start; min-height: 0; }
 .kanban-col { width: 285px; flex-shrink: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; display: flex; flex-direction: column; max-height: 100%; }
 .kanban-col.drag-over-col { box-shadow: 0 0 0 2px var(--accent); }
-.kanban-col.col-drop-before { box-shadow: -3px 0 0 var(--accent); background: rgba(255,107,43,0.05); transition: box-shadow 0.1s, background 0.1s; }
-.kanban-col.col-drop-after  { box-shadow:  3px 0 0 var(--accent); background: rgba(255,107,43,0.05); transition: box-shadow 0.1s, background 0.1s; }
+.kanban-col.col-dragging { opacity: 0.4; }
+.col-drop-indicator { position: absolute; top: 0; width: 3px; background: var(--accent); border-radius: 3px; pointer-events: none; z-index: 200; box-shadow: 0 0 8px var(--accent); transition: left 0.08s; }
+.col-ghost { position: fixed; pointer-events: none; z-index: 999; opacity: 0.85; border-radius: 12px; box-shadow: 0 16px 48px rgba(0,0,0,0.6); transform: rotate(2deg) scale(1.03); transition: transform 0.1s; background: var(--surface2); border: 1px solid var(--accent); overflow: hidden; }
+.col-drag-handle { cursor: grab; display: flex; align-items: center; padding: 0 4px 0 0; color: var(--muted); opacity: 0; transition: opacity 0.1s; flex-shrink: 0; }
+.col-drag-handle:active { cursor: grabbing; }
+.kanban-col-header:hover .col-drag-handle { opacity: 1; }
 .kanban-col-header { padding: 11px 13px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); gap: 8px; }
 .col-title { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; flex: 1; min-width: 0; }
 .col-title-text { cursor: pointer; border-bottom: 1px solid transparent; transition: border-color 0.1s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -394,7 +398,7 @@ let targetColId = null;
 let editingCardId = null;
 let filterMember = null;
 let dragCardEl=null, dragCardId=null, dragSrcColId=null, dropIndicator=null;
-let dragColId=null, dragColEl=null;
+// dragColId/dragColEl replaced by colDragId/colDragEl (mouse-based col reorder)
 
 // ── SUPABASE ──────────────────────────────────────────────────
 const SUPA_URL = "https://olbjelxyeabslimuwsxg.supabase.co";
@@ -745,51 +749,125 @@ function getCols(){
   return get("colsByMod")[currentMod];
 }
 function findCol(colId){for(const mid in get("colsByMod")){const c=get("colsByMod")[mid].find(c=>c.id===colId);if(c)return c;}return null;}
-function makeColEl(col){const div=document.createElement("div");div.className="kanban-col";div.dataset.colid=col.id;div.dataset.type="col";div.innerHTML=`<div class="kanban-col-header"><div class="col-title"><div class="col-dot" style="background:${col.color}"></div><span class="col-title-text" ondblclick="renameCol('${col.id}')" title="Doppelklick umbenennen">${col.name}</span></div><span class="col-count" id="cnt-${col.id}">0</span><button class="col-del" onclick="delCol('${col.id}')">✕</button></div><div class="kanban-cards" id="cc-${col.id}" data-colid="${col.id}"></div><button class="add-card-btn" onclick="openNewCard('${col.id}')">＋ Aufgabe hinzufügen</button>`;const zone=div.querySelector(".kanban-cards");zone.addEventListener("dragover",onDragOver);zone.addEventListener("dragleave",onDragLeave);zone.addEventListener("drop",onDrop);const header=div.querySelector(".kanban-col-header");header.style.cursor="grab";
-// ── Column drag (reorder) ──
-div.addEventListener("dragstart",e=>{
-  if(e.target.closest(".kanban-cards")||dragCardId)return;
-  dragColId=col.id;dragColEl=div;
-  e.dataTransfer.effectAllowed="move";
-  e.dataTransfer.setData("text/plain","col:"+col.id);
-  setTimeout(()=>{div.style.opacity="0.45";div.style.transform="scale(0.97)";},0);
-});
-div.addEventListener("dragend",()=>{
-  div.style.opacity="";div.style.transform="";
-  dragColId=null;dragColEl=null;
-  // Clear all drop indicators
-  document.querySelectorAll(".kanban-col.col-drop-before,.kanban-col.col-drop-after").forEach(el=>{el.classList.remove("col-drop-before","col-drop-after");});
-});
-div.addEventListener("dragover",e=>{
-  if(!dragColId||dragColId===col.id)return;
-  e.preventDefault();e.dataTransfer.dropEffect="move";
-  // Determine if drop point is left or right half of this column
-  const rect=div.getBoundingClientRect();
-  const mid=rect.left+rect.width/2;
-  document.querySelectorAll(".kanban-col.col-drop-before,.kanban-col.col-drop-after").forEach(el=>{el.classList.remove("col-drop-before","col-drop-after");});
-  if(e.clientX<mid){div.classList.add("col-drop-before");}else{div.classList.add("col-drop-after");}
-});
-div.addEventListener("dragleave",e=>{
-  if(!div.contains(e.relatedTarget)){div.classList.remove("col-drop-before","col-drop-after");}
-});
-div.addEventListener("drop",e=>{
-  if(!dragColId||dragColId===col.id)return;
-  e.preventDefault();e.stopPropagation();
-  const insertBefore=div.classList.contains("col-drop-before");
-  div.classList.remove("col-drop-before","col-drop-after");
-  const cols=getCols();
-  const fromIdx=cols.findIndex(c=>c.id===dragColId);
-  let toIdx=cols.findIndex(c=>c.id===col.id);
-  if(fromIdx===-1||toIdx===-1)return;
-  const[moved]=cols.splice(fromIdx,1);
-  // Recalculate toIdx after splice
-  toIdx=cols.findIndex(c=>c.id===col.id);
-  const insertIdx=insertBefore?toIdx:toIdx+1;
-  cols.splice(insertIdx,0,moved);
-  cols.forEach((c,i)=>{c.position=i;sb.from("columns").update({position:i}).eq("id",c.id);});
-  renderBoard();
-});
-return div;}
+function makeColEl(col){
+  const div=document.createElement("div");
+  div.className="kanban-col";
+  div.dataset.colid=col.id;
+  div.innerHTML=`<div class="kanban-col-header"><span class="col-drag-handle" title="Spalte verschieben"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="2" width="2" height="2" rx="1"/><rect x="10" y="2" width="2" height="2" rx="1"/><rect x="4" y="7" width="2" height="2" rx="1"/><rect x="10" y="7" width="2" height="2" rx="1"/><rect x="4" y="12" width="2" height="2" rx="1"/><rect x="10" y="12" width="2" height="2" rx="1"/></svg></span><div class="col-title"><div class="col-dot" style="background:${col.color}"></div><span class="col-title-text" ondblclick="renameCol('${col.id}')" title="Doppelklick umbenennen">${col.name}</span></div><span class="col-count" id="cnt-${col.id}">0</span><button class="col-del" onclick="delCol('${col.id}')">✕</button></div><div class="kanban-cards" id="cc-${col.id}" data-colid="${col.id}"></div><button class="add-card-btn" onclick="openNewCard('${col.id}')">＋ Aufgabe hinzufügen</button>`;
+  // Card drop zone
+  const zone=div.querySelector(".kanban-cards");
+  zone.addEventListener("dragover",onDragOver);
+  zone.addEventListener("dragleave",onDragLeave);
+  zone.addEventListener("drop",onDrop);
+  // Column drag via mousedown on handle
+  const handle=div.querySelector(".col-drag-handle");
+  handle.addEventListener("mousedown",e=>{
+    if(e.button!==0)return;
+    e.preventDefault();
+    startColDrag(col.id,div,e);
+  });
+  return div;
+}
+
+// ── Column mouse-drag (reorder) ──────────────────────────────
+let colDragId=null,colDragEl=null,colGhost=null,colDropIndicator=null,colDragActive=false;
+let colDragOffX=0,colDragOffY=0,colInsertAfterEl=null;
+
+function startColDrag(colId,colEl,e){
+  colDragId=colId; colDragEl=colEl;
+  const rect=colEl.getBoundingClientRect();
+  colDragOffX=e.clientX-rect.left;
+  colDragOffY=e.clientY-rect.top;
+
+  // Ghost
+  colGhost=document.createElement("div");
+  colGhost.className="col-ghost";
+  colGhost.style.width=rect.width+"px";
+  colGhost.style.height=Math.min(rect.height,220)+"px";
+  colGhost.innerHTML=colEl.querySelector(".kanban-col-header").outerHTML;
+  colGhost.style.left=(e.clientX-colDragOffX)+"px";
+  colGhost.style.top=(e.clientY-colDragOffY)+"px";
+  document.body.appendChild(colGhost);
+
+  // Drop indicator line
+  colDropIndicator=document.createElement("div");
+  colDropIndicator.className="col-drop-indicator";
+  const kanban=document.getElementById("kanban");
+  kanban.style.position="relative";
+  kanban.appendChild(colDropIndicator);
+  // Match height of kanban container
+  colDropIndicator.style.height=(kanban.clientHeight-20)+"px";
+  colDropIndicator.style.top="10px";
+  colDropIndicator.style.display="none";
+
+  colEl.classList.add("col-dragging");
+  colDragActive=false;
+
+  document.addEventListener("mousemove",onColDragMove);
+  document.addEventListener("mouseup",onColDragEnd);
+}
+
+function onColDragMove(e){
+  if(!colDragEl)return;
+  colDragActive=true;
+  // Move ghost
+  colGhost.style.left=(e.clientX-colDragOffX)+"px";
+  colGhost.style.top=(e.clientY-colDragOffY)+"px";
+  // Find insert position
+  const kanban=document.getElementById("kanban");
+  const cols=[...kanban.querySelectorAll(".kanban-col:not(.col-dragging)")];
+  colDropIndicator.style.display="block";
+  if(cols.length===0){colDropIndicator.style.left="20px";return;}
+  // Find closest gap
+  let insertX=null;
+  let insertAfterEl=null; // null = prepend before first
+  for(let i=0;i<cols.length;i++){
+    const r=cols[i].getBoundingClientRect();
+    const mid=r.left+r.width/2;
+    if(e.clientX<mid){
+      // insert before cols[i]
+      insertX=r.left-kanban.getBoundingClientRect().left+kanban.scrollLeft-3;
+      insertAfterEl=cols[i-1]||null;
+      break;
+    }
+    if(i===cols.length-1){
+      // insert after last
+      insertX=r.right-kanban.getBoundingClientRect().left+kanban.scrollLeft+3;
+      insertAfterEl=cols[i];
+    }
+  }
+  if(insertX!==null)colDropIndicator.style.left=insertX+"px";
+  colInsertAfterEl=insertAfterEl;
+}
+
+function onColDragEnd(e){
+  document.removeEventListener("mousemove",onColDragMove);
+  document.removeEventListener("mouseup",onColDragEnd);
+  if(colGhost)colGhost.remove();
+  colGhost=null;
+  if(colDropIndicator)colDropIndicator.remove();
+  colDropIndicator=null;
+  if(colDragEl)colDragEl.classList.remove("col-dragging");
+
+  if(colDragActive&&colDragId){
+    const insertAfterEl=colInsertAfterEl;
+    // Reorder cols array
+    const cols=getCols();
+    const fromIdx=cols.findIndex(c=>c.id===colDragId);
+    if(fromIdx===-1){colDragId=null;colDragEl=null;return;}
+    const[moved]=cols.splice(fromIdx,1);
+    if(!insertAfterEl){
+      cols.unshift(moved);
+    } else {
+      const afterId=insertAfterEl.dataset.colid;
+      const toIdx=cols.findIndex(c=>c.id===afterId);
+      cols.splice(toIdx+1,0,moved);
+    }
+    cols.forEach((c,i)=>{c.position=i;sb.from("columns").update({position:i}).eq("id",c.id);});
+    renderBoard();
+  }
+  colDragId=null;colDragEl=null;colDragActive=false;
+}
 function makeCardEl(card){const div=document.createElement("div");div.className=`card prio-${card.prio}`;div.dataset.cardid=card.id;div.draggable=true;const total=card.checkItems.length;const done=card.checkItems.filter(i=>i.done).length;const pct=total?Math.round(done/total*100):0;const prioMap={high:`<span class="tag tag-high">Hoch</span>`,mid:`<span class="tag tag-mid">Mittel</span>`,low:`<span class="tag tag-low">Niedrig</span>`};let dateHtml="";if(card.date){const d=new Date(card.date);const ov=d<new Date();dateHtml=`<div class="card-date${ov?" overdue":""}">${ov?"⚠":" 🗓"} ${d.toLocaleDateString("de-DE",{day:"numeric",month:"short"})}</div>`;}const initials=getInitials(card.owner);const color=getMemberColor(card.owner);div.innerHTML=`<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px"><div style="flex:1;min-width:0"><div class="card-tags">${prioMap[card.prio]||""}</div><div class="card-title">${card.title}</div>${card.note?`<div class="card-note">${card.note}</div>`:""}</div><button class="card-del-btn" onclick="delCard(event,'${card.id}')" title="Karte löschen">✕</button></div>${total?`<div class="cl-bar"><div class="cl-label"><span>Checkliste</span><span>${done}/${total}</span></div><div class="cl-track"><div class="cl-fill" style="width:${pct}%"></div></div></div>`:""}<div class="card-footer"><div class="card-meta">${card.owner?`<div class="avatar" style="width:22px;height:22px;font-size:9px;background:${color}">${initials}</div><span style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${card.owner}</span>`:`<span style="font-size:11px;color:var(--muted)">Nicht zugewiesen</span>`}</div>${dateHtml}</div>`;div.addEventListener("dblclick",()=>openEditCard(card.id));div.addEventListener("dragstart",e=>{dragCardEl=div;dragCardId=card.id;dragSrcColId=div.closest(".kanban-cards").dataset.colid;setTimeout(()=>div.classList.add("dragging"),0);e.dataTransfer.effectAllowed="move";});div.addEventListener("dragend",()=>{div.classList.remove("dragging");if(dropIndicator)dropIndicator.remove();dropIndicator=null;dragCardEl=null;dragCardId=null;dragSrcColId=null;});return div;}
 function syncCount(colId){const col=findCol(colId);const el=document.getElementById("cnt-"+colId);if(el&&col)el.textContent=col.cardIds.length;}
 async function renameCol(colId){const col=findCol(colId);const name=prompt("Spalte umbenennen:",col.name);if(name&&name.trim()){col.name=name.trim();await sb.from("columns").update({name:name.trim()}).eq("id",colId);renderBoard();showToast("✓ Spalte umbenannt");}}
@@ -862,7 +940,7 @@ async function delCard(e, cardId) {
 function findColModule(colId){for(const mid in get("colsByMod")){if(get("colsByMod")[mid].find(c=>c.id===colId))return mid;}return null;}
 function onDragOver(e){e.preventDefault();e.dataTransfer.dropEffect="move";this.closest(".kanban-col").classList.add("drag-over-col");if(!dropIndicator){dropIndicator=document.createElement("div");dropIndicator.className="drop-indicator";}const after=getAfterEl(this,e.clientY);if(after)this.insertBefore(dropIndicator,after);else this.appendChild(dropIndicator);}
 function onDragLeave(e){if(!this.contains(e.relatedTarget))this.closest(".kanban-col").classList.remove("drag-over-col");}
-function onDrop(e){e.preventDefault();const zone=this;zone.closest(".kanban-col").classList.remove("drag-over-col");if(dragColId)return;if(!dragCardEl||!dragCardId)return;const tgtColId=zone.dataset.colid;const srcCol=findCol(dragSrcColId);if(srcCol)srcCol.cardIds=srcCol.cardIds.filter(c=>c!==dragCardId);const tgtCol=findCol(tgtColId);if(!tgtCol)return;let afterId=null;if(dropIndicator){const next=dropIndicator.nextElementSibling;if(next&&next.dataset.cardid)afterId=next.dataset.cardid;}if(afterId){const idx=tgtCol.cardIds.indexOf(afterId);tgtCol.cardIds.splice(idx,0,dragCardId);}else{tgtCol.cardIds.push(dragCardId);}if(dropIndicator){const next=dropIndicator.nextElementSibling;dropIndicator.remove();if(next)zone.insertBefore(dragCardEl,next);else zone.appendChild(dragCardEl);}dropIndicator=null;syncCount(dragSrcColId);syncCount(tgtColId);renderProgress();// Save new column + positions to Supabase
+function onDrop(e){e.preventDefault();const zone=this;zone.closest(".kanban-col").classList.remove("drag-over-col");if(colDragId)return;if(!dragCardEl||!dragCardId)return;const tgtColId=zone.dataset.colid;const srcCol=findCol(dragSrcColId);if(srcCol)srcCol.cardIds=srcCol.cardIds.filter(c=>c!==dragCardId);const tgtCol=findCol(tgtColId);if(!tgtCol)return;let afterId=null;if(dropIndicator){const next=dropIndicator.nextElementSibling;if(next&&next.dataset.cardid)afterId=next.dataset.cardid;}if(afterId){const idx=tgtCol.cardIds.indexOf(afterId);tgtCol.cardIds.splice(idx,0,dragCardId);}else{tgtCol.cardIds.push(dragCardId);}if(dropIndicator){const next=dropIndicator.nextElementSibling;dropIndicator.remove();if(next)zone.insertBefore(dragCardEl,next);else zone.appendChild(dragCardEl);}dropIndicator=null;syncCount(dragSrcColId);syncCount(tgtColId);renderProgress();// Save new column + positions to Supabase
 const movedCard=get("cards")[dragCardId];const newModId=findColModule(tgtColId);if(movedCard&&newModId&&movedCard.moduleId!==newModId){movedCard.moduleId=newModId;sb.from("cards").update({column_id:tgtColId,module_id:newModId,position:tgtCol.cardIds.indexOf(dragCardId)}).eq("id",dragCardId).then(()=>{tgtCol.cardIds.forEach((cid,i)=>sb.from("cards").update({position:i}).eq("id",cid));});}else{sb.from("cards").update({column_id:tgtColId,position:tgtCol.cardIds.indexOf(dragCardId)}).eq("id",dragCardId).then(()=>{tgtCol.cardIds.forEach((cid,i)=>sb.from("cards").update({position:i}).eq("id",cid));});}}
 function getAfterEl(zone,y){return[...zone.querySelectorAll(".card:not(.dragging)")].reduce((cl,el)=>{const box=el.getBoundingClientRect();const off=y-box.top-box.height/2;if(off<0&&off>cl.off)return{off,el};return cl;},{off:Number.NEGATIVE_INFINITY}).el;}
 
