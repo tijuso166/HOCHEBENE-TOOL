@@ -78,8 +78,9 @@ header { background: #0a0a0d; border-bottom: 1px solid var(--border); padding: 0
 .view-toggle button.active { background: var(--surface3); color: var(--text); }
 
 /* KANBAN */
-.kanban-container { flex: 1; overflow-x: auto; overflow-y: hidden; padding: 16px 20px; display: flex; gap: 14px; align-items: stretch; }
-.kanban-col { width: 285px; flex-shrink: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+#view-kanban { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.kanban-container { flex: 1; overflow-x: auto; overflow-y: hidden; padding: 16px 20px; display: flex; gap: 14px; align-items: flex-start; min-height: 0; }
+.kanban-col { width: 285px; flex-shrink: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; display: flex; flex-direction: column; max-height: 100%; }
 .kanban-col.drag-over-col { box-shadow: 0 0 0 2px var(--accent); }
 .kanban-col.col-drop-before { box-shadow: -3px 0 0 var(--accent); background: rgba(255,107,43,0.05); transition: box-shadow 0.1s, background 0.1s; }
 .kanban-col.col-drop-after  { box-shadow:  3px 0 0 var(--accent); background: rgba(255,107,43,0.05); transition: box-shadow 0.1s, background 0.1s; }
